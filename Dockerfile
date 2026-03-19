@@ -1,4 +1,4 @@
-FROM fossology/fossology:4.4.0
+FROM fossology/fossology:4.6.0
 
 ADD scancode.conf.diff /usr/local/etc/fossology/mods-enabled/scancode/scancode.conf.diff
 RUN cd /usr/local/etc/fossology/mods-enabled/scancode && patch -N < /usr/local/etc/fossology/mods-enabled/scancode/scancode.conf.diff
