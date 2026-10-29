@@ -14,6 +14,8 @@ env:
   REGISTRY: ghcr.io
   # github.repository as <account>/<repo>
   IMAGE_NAME: ${{ github.repository }}
+  FOSSOLOGY_BASE_IMAGE: ${{ vars.FOSSOLOGY_BASE_IMAGE || 'registry.devops.defra01.iris-sensing.net/it/infrastructure/container-images/fossology/fossology:latest' }}
+  FOSSOLOGY_BASE_REGISTRY: ${{ vars.FOSSOLOGY_BASE_REGISTRY || 'registry.devops.defra01.iris-sensing.net' }}
 
 
 jobs:
@@ -44,6 +46,14 @@ jobs:
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v3.1.0
 
+      # Read-only credentials for the non-root base published by the GitLab build.
+      - name: Log into the FOSSology base registry
+        uses: docker/login-action@v3.0.0
+        with:
+          registry: ${{ env.FOSSOLOGY_BASE_REGISTRY }}
+          username: ${{ secrets.FOSSOLOGY_REGISTRY_USERNAME }}
+          password: ${{ secrets.FOSSOLOGY_REGISTRY_PASSWORD }}
+
       # Login against a Docker registry except on PR
       # https://github.com/docker/login-action
       - name: Log into registry ${{ env.REGISTRY }}
@@ -69,6 +79,8 @@ jobs:
         uses: docker/build-push-action@v5.1.0
         with:
           context: "{{defaultContext}}"
+          build-args: |
+            FOSSOLOGY_BASE_IMAGE=${{ env.FOSSOLOGY_BASE_IMAGE }}
           push: ${{ github.event_name != 'pull_request' }} # Don't push on PR
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

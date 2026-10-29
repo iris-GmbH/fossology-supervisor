@@ -11,68 +11,32 @@
 
 set -o errexit -o nounset -o pipefail
 
-db_host="${FOSSOLOGY_DB_HOST:-localhost}"
-db_name="${FOSSOLOGY_DB_NAME:-fossology}"
-db_user="${FOSSOLOGY_DB_USER:-fossy}"
-db_password="${FOSSOLOGY_DB_PASSWORD:-fossy}"
-
-# Write configuration
-cat <<EOM > /usr/local/etc/fossology/Db.conf
-dbname=$db_name;
-host=$db_host;
-user=$db_user;
-password=$db_password;
-EOM
-
-sed -i 's/address = .*/address = '"${FOSSOLOGY_SCHEDULER_HOST:-localhost}"'/' \
-    /usr/local/etc/fossology/fossology.conf
-
-# Startup DB if needed or wait for external DB
-if [[ $db_host == 'localhost' ]]; then
-  echo '*****************************************************'
-  echo 'WARNING: No database host was set and therefore the'
-  echo 'internal database without persistency will be used.'
-  echo 'THIS IS NOT RECOMENDED FOR PRODUCTIVE USE!'
-  echo '*****************************************************'
-  sleep 5
-  /etc/init.d/postgresql start
-else
-  test_for_postgres() {
-    PGPASSWORD=$db_password psql -h "$db_host" "$db_name" "$db_user" -c '\l' >/dev/null
-    return $?
-  }
-  until test_for_postgres; do
-    >&2 echo "Postgres is unavailable - sleeping"
-    sleep 1
-  done
+if [[ $(id -u) == 0 ]]; then
+  echo 'FOSSology supervisor: run as fossy (UID/GID 10001), not root' >&2
+  exit 1
 fi
 
-# Setup environment
-if [[ $# -eq 0 || ($# -eq 1 && "$1" == "scheduler") || ($# -eq 1 && "$1" == "supervisor") ]]; then
-  /usr/local/lib/fossology/fo-postinstall --common --database --licenseref
-fi
+# Refresh this on every start, including restarts with an existing /run volume.
+# /etc/php remains read-only; PHP_INI_SCAN_DIR applies this to every PHP SAPI.
+# This disables the session upload-progress vector of CVE-2026-109619 only.
+umask 0007
+php_ini_dir=/run/fossology/php-conf.d
+mkdir -p "$php_ini_dir"
+cat > "$php_ini_dir/99-php2shell.ini" <<'INI'
+session.upload_progress.enabled = 0
+session.upload_progress.enabled_sid = 0
+INI
+case "${PHP_INI_SCAN_DIR:-}" in
+  "$php_ini_dir"|*":$php_ini_dir") ;;
+  *) export PHP_INI_SCAN_DIR="${PHP_INI_SCAN_DIR:-}:$php_ini_dir" ;;
+esac
 
-# Start Fossology
-echo
-echo 'Fossology initialisation complete; Starting up...'
-echo
-if [[ $# -eq 0 ]]; then
-  /etc/init.d/cron start
-  /usr/local/share/fossology/scheduler/agent/fo_scheduler \
-    --log /dev/stdout \
-    --verbose=3 \
-    --reset &
-  /usr/sbin/apache2ctl -D FOREGROUND
-elif [[ $# -eq 1 && "$1" == "scheduler" ]]; then
-  exec /usr/local/share/fossology/scheduler/agent/fo_scheduler \
-    --log /dev/stdout \
-    --verbose=3 \
-    --reset
-elif [[ $# -eq 1 && "$1" == "web" ]]; then
-  /etc/init.d/cron start
-  exec /usr/sbin/apache2ctl -e info -D FOREGROUND
-elif [[ $# -eq 1 && "$1" == "supervisor" ]]; then
-  exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
-else
-  exec "$@"
-fi
+case "${1:-supervisor}" in
+  supervisor|all)
+    # Initialize once before starting either service. Preserve the base's Apache
+    # environment and private PostgreSQL passfile for Supervisor's children.
+    exec /usr/local/bin/fossology-entrypoint init \
+      /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
+    ;;
+  *) exec /usr/local/bin/fossology-entrypoint "$@" ;;
+esac
